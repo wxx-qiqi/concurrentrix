@@ -10,15 +10,15 @@ import (
 func init() {
 	successFile, err := os.Create("record/success.txt")
 	if err != nil {
-		fmt.Printf("读取响应体错误: %v", err)
+		fmt.Printf("error reading response body: %v", err)
 		return
 	}
 	defer successFile.Close()
 
-	// 创建或打开文件
+	// Create or open a file
 	failFile, err := os.Create("record/fail.txt")
 	if err != nil {
-		fmt.Printf("读取响应体错误: %v", err)
+		fmt.Printf("error reading response body: %v", err)
 		return
 	}
 	defer failFile.Close()
@@ -26,18 +26,18 @@ func init() {
 
 // WriteSuccessPhone 输出正确的phone
 func WriteSuccessPhone(phones chan string, mutex *sync.Mutex, jobs *int) {
-	// 打开文件
+	// Open file
 	file, err := os.OpenFile("record/success.txt", os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644)
 	if err != nil {
-		fmt.Printf("打开文件时发生错误: %v", err)
+		fmt.Printf("an error occurred while opening the file: %v", err)
 		return
 	}
 	defer file.Close()
 
-	// 创建写入器
+	// Creating a writer
 	writer := bufio.NewWriter(file)
 
-	// 逐行写入数据
+	// Write data line by line
 	for {
 		phone, ok := <-phones
 		if !ok {
@@ -46,14 +46,14 @@ func WriteSuccessPhone(phones chan string, mutex *sync.Mutex, jobs *int) {
 		fmt.Printf("============success phone{%v}=============\n", phone)
 		_, err = writer.WriteString(phone + "\n")
 		if err != nil {
-			fmt.Printf("写入错误: %v", err)
+			fmt.Printf("write error: %v", err)
 			return
 		}
 
-		// 刷新缓冲区
+		// Refresh buffer
 		err = writer.Flush()
 		if err != nil {
-			fmt.Printf("flush错误: %v", err)
+			fmt.Printf("flush error: %v", err)
 			return
 		}
 		mutex.Lock()
@@ -64,18 +64,18 @@ func WriteSuccessPhone(phones chan string, mutex *sync.Mutex, jobs *int) {
 
 // WriteFailPhone 输出失败的phone
 func WriteFailPhone(phones chan string, mutex *sync.Mutex, jobs *int) {
-	// 打开文件
+	// Open file
 	file, err := os.OpenFile("record/fail.txt", os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644)
 	if err != nil {
-		fmt.Printf("打开文件时发生错误: %v", err)
+		fmt.Printf("an error occurred while opening the file: %v", err)
 		return
 	}
 	defer file.Close()
 
-	// 创建写入器
+	// Creating a writer
 	writer := bufio.NewWriter(file)
 
-	// 逐行写入数据
+	// Write data line by line
 	for {
 		phone, ok := <-phones
 		if !ok {
@@ -85,14 +85,14 @@ func WriteFailPhone(phones chan string, mutex *sync.Mutex, jobs *int) {
 		_, err = writer.WriteString(phone + "\n")
 		//_, err = fmt.Fprintf(writer, phone)
 		if err != nil {
-			fmt.Printf("写入错误: %v", err)
+			fmt.Printf("write error: %v", err)
 			return
 		}
 
-		// 刷新缓冲区
+		// Refresh buffer
 		err = writer.Flush()
 		if err != nil {
-			fmt.Printf("flush错误: %v", err)
+			fmt.Printf("flush error: %v", err)
 			return
 		}
 		mutex.Lock()

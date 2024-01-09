@@ -12,8 +12,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"concurrentrix/config"
@@ -32,17 +34,16 @@ var (
 )
 
 func main() {
+	fmt.Printf("============ START TASK =============\n")
 	phones, err := readPhone()
 	if err != nil {
 		fmt.Print(err.Error())
 		return
 	}
 
-	useJobs := new(int)
-	*useJobs = len(phones)
-
-	go record.WriteSuccessPhone(SuccessPhones, &MutexUseJobs, useJobs)
-	go record.WriteFailPhone(FailPhones, &MutexUseJobs, useJobs)
+	useJobs := len(phones)
+	go record.WriteSuccessPhone(SuccessPhones, &MutexUseJobs, &useJobs)
+	go record.WriteFailPhone(FailPhones, &MutexUseJobs, &useJobs)
 
 	phoneJobs := make(chan string)
 
@@ -51,15 +52,34 @@ func main() {
 		againSend()
 	}
 
+	var lastPhone string
 	for _, phone := range phones {
 		phoneJobs <- phone
+		lastPhone = phone
 	}
 
+	go func() {
+		signalChan := make(chan os.Signal, 1)
+		signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
+		<-signalChan
+		signal.Stop(signalChan)
+		fmt.Printf("\n received interrupt signal. exiting... \n")
+		// Use the lastPhone variable here
+		fmt.Printf("Last phone received: %s\n", lastPhone)
+		close(SuccessPhones)
+		close(FailPhones)
+		close(AgainPhones)
+		close(phoneJobs)
+		os.Exit(1)
+	}()
+
 	for {
-		if SendJobs == len(phones) && *useJobs == 0 && AgainNum == 0 {
+		if SendJobs == len(phones) && useJobs == 0 && AgainNum == 0 {
 			close(SuccessPhones)
 			close(FailPhones)
 			close(AgainPhones)
+			close(phoneJobs)
+			fmt.Printf("Last phone received: %s\n", lastPhone)
 			os.Exit(1)
 		}
 	}
@@ -74,16 +94,17 @@ func threadSend(jobs chan string) {
 				fmt.Print(err.Error())
 				return
 			}
-			fmt.Printf("============ 开始发送 phone{%v}=============\n", phone)
+			fmt.Printf("============ START SEND PHONE{%v}=============\n", phone)
 			err = smsSend(phone, xRay)
 			if err != nil {
-				if config.Again == 0 {
+				if config.SendTimes == 0 {
 					FailPhones <- phone
 				} else {
-					AgainPhones <- &AgainSendPool{
-						phone:     phone,
-						Frequency: 0,
+					ap := &AgainSendPool{
+						phone: phone,
 					}
+					ap.Frequency++
+					AgainPhones <- ap
 					MutexAgainNum.Lock()
 					AgainNum++
 					MutexAgainNum.Unlock()
@@ -93,7 +114,6 @@ func threadSend(jobs chan string) {
 			MutexSendJobs.Lock()
 			SendJobs++
 			MutexSendJobs.Unlock()
-			time.Sleep(5 * time.Millisecond)
 		}
 	}()
 }
@@ -106,7 +126,6 @@ type AgainSendPool struct {
 func againSend() {
 	go func() {
 		for {
-			fmt.Printf("AgainNum=================%d\n", AgainNum)
 			agPh := <-AgainPhones
 			MutexAgainNum.Lock()
 			AgainNum--
@@ -116,10 +135,10 @@ func againSend() {
 				fmt.Print(err.Error())
 				return
 			}
-			if agPh.Frequency == config.Again {
+			if agPh.Frequency == config.SendTimes {
 				FailPhones <- agPh.phone
 			} else {
-				fmt.Printf("============ {%d} 重复发送 phone{%v}=============\n", agPh.Frequency, agPh.phone)
+				fmt.Printf("============ {%d} AGAIN START SEND PHONE{%v}=============\n", agPh.Frequency, agPh.phone)
 				err = smsSend(agPh.phone, xRay)
 				if err != nil {
 					fmt.Printf("%v\n", err)
@@ -144,10 +163,10 @@ func readPhone() (phones []string, err error) {
 	}
 	defer file.Close()
 
-	// 使用 bufio 包创建一个 Scanner
+	// Creating a Scanner with the bufio package
 	scanner := bufio.NewScanner(file)
 
-	// 逐行读取文件内容
+	// Read the contents of a file line by line
 	for scanner.Scan() {
 		line := scanner.Text()
 		// 处理前后空格
@@ -155,24 +174,24 @@ func readPhone() (phones []string, err error) {
 		phones = append(phones, trimmedLine)
 	}
 
-	// 检查是否发生了扫描错误
+	// Checking for scanning errors
 	err = scanner.Err()
 	if err != nil {
-		err = fmt.Errorf("扫描文件时发生错误:", err)
+		err = fmt.Errorf("error while scanning a document: %v", err)
 		return
 	}
 	return
 }
 
-// 编码为 Base64
+// Coded as Base64
 func getPhoneSha256(strToHash string) string {
-	// 第一次 SHA-256 哈希
+	// First SHA-256 hash
 	sha256Hash := sha256.New()
 	sha256Hash.Write([]byte(strToHash))
 	hashedStr := sha256Hash.Sum(nil)
 	hashedStrHex := hex.EncodeToString(hashedStr)
 
-	// 第二次 SHA-256 哈希
+	// Second SHA-256 hash
 	sha256Hash = sha256.New()
 	sha256Hash.Write([]byte(hashedStrHex))
 	digest := sha256Hash.Sum(nil)
@@ -181,7 +200,7 @@ func getPhoneSha256(strToHash string) string {
 	return hexDigest
 }
 
-// 获取Authorization
+// Gain Authorization
 func getPhoneSha256s(strToHash string) string {
 	sha256Hash := sha256.New()
 	sha256Hash.Write([]byte(strToHash))
@@ -210,7 +229,7 @@ func getXRay(enco string) (string, error) {
 	}
 	defer resp.Body.Close()
 
-	// 读取响应体
+	// Read the response body
 	var result *xRayStr
 	decoder := json.NewDecoder(resp.Body)
 	err = decoder.Decode(&result)
@@ -223,20 +242,20 @@ func getXRay(enco string) (string, error) {
 }
 
 func generateRandomDriverID() string {
-	// 设置随机数种子
+	// Setting the random number seed
 	rand.Seed(time.Now().UnixNano())
 
-	// 生成1000到9999之间的随机数
+	// Generate random numbers between 1000 and 9999
 	randomNumber := rand.Intn(9000) + 1000
 
-	// 生成带有固定后缀的driver_id
+	// Generate driver_id with a fixed suffix
 	driverID := fmt.Sprintf("%d%s", randomNumber, "c6509c1db2d1")
 
 	return driverID
 }
 
 func smsSend(phone, xRay string) error {
-	// 构建请求头
+	// Constructing the request header
 	headers := map[string]string{
 		"Connection":           "close",
 		"X-Ray":                xRay,
@@ -253,7 +272,7 @@ func smsSend(phone, xRay string) error {
 		"accept-encoding":      "gzip",
 	}
 
-	// 构建请求体
+	// Constructing the request body
 	payload := map[string]interface{}{
 		"method":                  "SMS",
 		"countryCode":             "cn",
@@ -277,56 +296,56 @@ func smsSend(phone, xRay string) error {
 		"scenario":                "signup",
 	}
 
-	// 将请求体转为JSON格式
+	// Convert request body to JSON
 	jsonPayload, err := json.Marshal(payload)
 	if err != nil {
-		err = fmt.Errorf("JSON编码错误:%v", err)
+		err = fmt.Errorf("JSON encoding error:%v", err)
 		return err
 	}
 
-	// 发送POST请求
+	// Send a POST request
 	req, err := http.NewRequest("POST", smsSendUrl, bytes.NewBuffer(jsonPayload))
 	if err != nil {
-		err = fmt.Errorf("创建请求错误:%v", err)
+		err = fmt.Errorf("create request error:%v", err)
 		return err
 	}
 
-	// 设置请求头
+	// Setting the request header
 	for key, value := range headers {
 		req.Header.Set(key, value)
 	}
 
-	// 设置代理
+	// Setting up the proxy
 	proxyURL := fmt.Sprintf("http://%s:%s@%s/", username, password, tunnel)
 	parsedProxyURL, err := url.Parse(proxyURL)
 	if err != nil {
-		err = fmt.Errorf("解析代理URL错误: %v", err)
+		err = fmt.Errorf("parsing proxy URL error: %v", err)
 		return err
 	}
 	transport := &http.Transport{Proxy: http.ProxyURL(parsedProxyURL)}
 	client := &http.Client{Transport: transport}
 
-	// 发送请求
+	// Send request
 	response, err := client.Do(req)
 	if err != nil {
-		err = fmt.Errorf("发送请求错误: %v", err)
+		err = fmt.Errorf("send request error: %v", err)
 		return err
 	}
 	defer response.Body.Close()
 
-	// 读取响应体
+	// Read the response body
 	body, _ := ioutil.ReadAll(response.Body)
 	if err != nil {
-		err = fmt.Errorf("读取响应体错误: %v", err)
+		err = fmt.Errorf("error reading response body: %v", err)
 		return err
 	}
 
-	// 打印响应结果
-	fmt.Printf("响应结果: %s\n", body)
+	// Printing response results
+	fmt.Printf("Response results: %s\n", body)
 	if response.StatusCode == http.StatusOK {
 		if bytes.Contains(body, []byte("challengeID")) {
 			SuccessPhones <- phone
-			fmt.Printf("号码:%s send success\n", phone)
+			fmt.Printf("phone:%s send success\n", phone)
 		} else {
 			ap := &AgainSendPool{
 				phone: phone,
@@ -336,10 +355,10 @@ func smsSend(phone, xRay string) error {
 			MutexAgainNum.Lock()
 			AgainNum++
 			MutexAgainNum.Unlock()
-			fmt.Printf("号码:%s send error。%s\n", phone, body)
+			fmt.Printf("phone:%s send error。%s\n", phone, body)
 		}
 	} else {
-		err = fmt.Errorf("号码:%s send error。Status Code: %d\n", phone, response.StatusCode)
+		err = fmt.Errorf("phone:%s send error。Status Code: %d\n", phone, response.StatusCode)
 	}
 	return err
 }
