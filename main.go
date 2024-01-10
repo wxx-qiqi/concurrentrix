@@ -24,22 +24,11 @@ func main() {
 	}
 
 	useJobs := len(phones)
+	phoneJobs := make(chan string)
+	var lastPhone string
+
 	go record.WriteSuccessPhone(core.SuccessPhones, &core.MutexUseJobs, &useJobs)
 	go record.WriteFailPhone(core.FailPhones, &core.MutexUseJobs, &useJobs)
-
-	phoneJobs := make(chan string)
-
-	for i := 0; i < config.Work; i++ {
-		threadSend(phoneJobs)
-		againSend()
-	}
-
-	var lastPhone string
-	for _, phone := range phones {
-		phoneJobs <- phone
-		lastPhone = phone
-	}
-
 	go func() {
 		signalChan := make(chan os.Signal, 1)
 		signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
@@ -54,6 +43,16 @@ func main() {
 		close(phoneJobs)
 		os.Exit(1)
 	}()
+
+	for i := 0; i < config.Work; i++ {
+		threadSend(phoneJobs)
+		againSend()
+	}
+
+	for _, phone := range phones {
+		phoneJobs <- phone
+		lastPhone = phone
+	}
 
 	for {
 		if core.SendJobs == len(phones) && useJobs == 0 && core.AgainNum == 0 {
