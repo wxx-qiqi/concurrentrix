@@ -6,8 +6,6 @@ import (
 	"math/rand"
 	"net/http"
 	"time"
-
-	"concurrentrix/internal"
 )
 
 var (
@@ -17,6 +15,12 @@ var (
 	username   = "t10407739755674"
 	password   = "op1un18b"
 )
+
+type XRayStr struct {
+	ClientID string
+	Data     string
+	Message  interface{}
+}
 
 func generateRandomDriverID() string {
 	// Setting the random number seed
@@ -40,7 +44,7 @@ func GetXRay(enco string) (string, error) {
 	defer resp.Body.Close()
 
 	// Read the response body
-	var result *internal.XRayStr
+	var result *XRayStr
 	decoder := json.NewDecoder(resp.Body)
 	err = decoder.Decode(&result)
 	if err != nil {

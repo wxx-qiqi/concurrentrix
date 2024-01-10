@@ -10,23 +10,17 @@ import (
 	"sync"
 	"time"
 
-	"concurrentrix/config"
 	"concurrentrix/core/tools"
-	"concurrentrix/internal"
 )
 
 var (
-	SuccessPhones = make(chan string, config.ChanNum)
-	FailPhones    = make(chan string, config.ChanNum)
-	AgainPhones   = make(chan *internal.AgainSendPool, config.ChanNum)
 	MutexSendJobs sync.Mutex
-	MutexUseJobs  sync.Mutex
 	MutexAgainNum sync.Mutex
 	SendJobs      = 0
 	AgainNum      = 0
 )
 
-func SmsSend(phone, xRay string) error {
+func smsSend(phone, xRay string, saveJobs *SaveJobsStr) error {
 	// Constructing the request header
 	headers := map[string]string{
 		"Connection":           "close",
@@ -116,14 +110,14 @@ func SmsSend(phone, xRay string) error {
 	fmt.Printf("Response results: %s\n", body)
 	if response.StatusCode == http.StatusOK {
 		if bytes.Contains(body, []byte("challengeID")) {
-			SuccessPhones <- phone
+			saveJobs.SuccessJobs <- phone
 			fmt.Printf("phone:%s send success\n", phone)
 		} else {
-			ap := &internal.AgainSendPool{
-				Phone: phone,
+			ap := &AgainJobsStr{
+				Job: phone,
 			}
 			ap.Frequency++
-			AgainPhones <- ap
+			saveJobs.AgainJobs <- ap
 			MutexAgainNum.Lock()
 			AgainNum++
 			MutexAgainNum.Unlock()

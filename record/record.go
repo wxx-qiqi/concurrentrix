@@ -24,8 +24,8 @@ func init() {
 	defer failFile.Close()
 }
 
-// WriteSuccessPhone 输出正确的phone
-func WriteSuccessPhone(phones chan string, mutex *sync.Mutex, jobs *int) {
+// WriteSuccessJob 输出正确的job
+func WriteSuccessJob(jobs chan string, mutex *sync.Mutex, num *int) {
 	// Open file
 	file, err := os.OpenFile("record/success.txt", os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644)
 	if err != nil {
@@ -39,12 +39,12 @@ func WriteSuccessPhone(phones chan string, mutex *sync.Mutex, jobs *int) {
 
 	// Write data line by line
 	for {
-		phone, ok := <-phones
+		job, ok := <-jobs
 		if !ok {
 			break
 		}
-		fmt.Printf("============success phone{%v}=============\n", phone)
-		_, err = writer.WriteString(phone + "\n")
+		fmt.Printf("============success phone{%v}=============\n", job)
+		_, err = writer.WriteString(job + "\n")
 		if err != nil {
 			fmt.Printf("write error: %v", err)
 			return
@@ -57,13 +57,13 @@ func WriteSuccessPhone(phones chan string, mutex *sync.Mutex, jobs *int) {
 			return
 		}
 		mutex.Lock()
-		*jobs--
+		*num--
 		mutex.Unlock()
 	}
 }
 
-// WriteFailPhone 输出失败的phone
-func WriteFailPhone(phones chan string, mutex *sync.Mutex, jobs *int) {
+// WriteFailJob 输出失败的Job
+func WriteFailJob(jobs chan string, mutex *sync.Mutex, num *int) {
 	// Open file
 	file, err := os.OpenFile("record/fail.txt", os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644)
 	if err != nil {
@@ -77,13 +77,13 @@ func WriteFailPhone(phones chan string, mutex *sync.Mutex, jobs *int) {
 
 	// Write data line by line
 	for {
-		phone, ok := <-phones
+		job, ok := <-jobs
 		if !ok {
 			break
 		}
-		fmt.Printf("============fail phone{%v}=============\n", phone)
-		_, err = writer.WriteString(phone + "\n")
-		//_, err = fmt.Fprintf(writer, phone)
+		fmt.Printf("============fail job{%v}=============\n", job)
+		_, err = writer.WriteString(job + "\n")
+		//_, err = fmt.Fprintf(writer, job)
 		if err != nil {
 			fmt.Printf("write error: %v", err)
 			return
@@ -96,7 +96,7 @@ func WriteFailPhone(phones chan string, mutex *sync.Mutex, jobs *int) {
 			return
 		}
 		mutex.Lock()
-		*jobs--
+		*num--
 		mutex.Unlock()
 	}
 }
